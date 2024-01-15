@@ -149,7 +149,7 @@ mod6=lmer(score ~ age +genre+duree+BTC1+BTC2+EFS+VFNL +(FF.Abs+AV.dB|  sujet), d
 RMSE6= rmse(valid$score,predict(mod6, newdata = valid))
 
 #TROP GROS MODELE NE CONVERGE PAS
-mod7=lmer(score ~ age +genre+duree +(FF.Abs+AV.dB+BTC1+BTC2+EFS+VFNL+CDNL|  sujet), data = train, REML = FALSE) 
+mod7=lmer(score ~ age +genre+duree+FF.Abs+AV.dB+BTC1+BTC2+EFS+VFNL+CDNL +(FF.Abs+AV.dB+BTC1+BTC2+EFS+VFNL+CDNL|  sujet), data = train, REML = FALSE) 
 RMSE7= rmse(valid$score,predict(mod7, newdata = valid))
 
 mod8=lmer(score ~ age +genre+duree+BTC1+BTC2+EFS+VFNL+CDNL +(FF.Abs+AV.dB|  sujet), data = train, REML = FALSE) 
@@ -158,7 +158,7 @@ RMSE8= rmse(valid$score,predict(mod8, newdata = valid))
 mod9=lmer(score ~ age +genre+duree+BTC1+BTC2+EFS+VFNL + FF.Abs +CDNL+(AV.dB|  sujet), data = train, REML = FALSE) 
 RMSE9= rmse(valid$score,predict(mod9, newdata = valid))
 
-mod10=lmer(score ~ age +genre+duree+BTC1+BTC2+EFS+VFNL + FF.Abs +(AV.dB|  sujet), data = train) 
+mod10=lmer(score ~ age +genre+duree+BTC1+BTC2+EFS+VFNL + FF.Abs +AV.dB +(1|  sujet), data = train) 
 RMSE10= rmse(valid$score,predict(mod10, newdata = valid))
 
 m10update<-update(mod10, REML=FALSE)
@@ -167,8 +167,18 @@ RMSE10_UPDATE= rmse(valid$score,predict(m10update, newdata = valid))
 sort(as.matrix(AIC(mod4,mod5,mod6,mod7,mod8,mod9,mod10,m10update))[,2])%>%data.frame()%>% rmarkdown::paged_table()
 sort(as.matrix(BIC(mod4,mod5,mod6,mod7,mod8,mod9,mod10,m10update))[,2])%>%data.frame()%>% rmarkdown::paged_table()
 
-mod11=lm(score ~., data = train) 
-RMSE11=rmse(valid$score,predict(mod11,newdata=valid))
+valid$pred_mod_m1 <- predict(mod7,newdata=valid)
+
+valid %>% filter(sujet %in% selected) %>% 
+  ggplot() + geom_point(aes(x = duree, y = score), color="red", size=3) + 
+  geom_line(aes(x = duree, y = pred_mod_m1)) + facet_wrap(~ sujet, ncol=4) 
+
+
+train$pred_mod_m1 <- fitted(mod7)
+
+train %>% filter(sujet %in% selected) %>% 
+  ggplot() + geom_point(aes(x = duree, y = score), color="red", size=3) + 
+  geom_line(aes(x = duree, y = pred_mod_m1)) + facet_wrap(~ sujet, ncol=4) 
 
 
 #XG BOOST
@@ -199,6 +209,17 @@ predicted = predict(xgb_model, X_test)
 residuals = Y_test - predicted
 RMSE = sqrt(mean(residuals^2))
 
+pred_mod_m1=predict(xgb_model,X_train)
+train$pred_mod_m1=pred_mod_m1
+train %>% filter(sujet %in% selected) %>% 
+  ggplot() + geom_point(aes(x = duree, y = score), color="red", size=3) + 
+  geom_line(aes(x = duree, y = pred_mod_m1)) + facet_wrap(~ sujet, ncol=4) 
+
+valid$pred_mod_m1=predicted
+valid %>% filter(sujet %in% selected) %>% 
+  ggplot() + geom_point(aes(x = duree, y = score), color="red", size=3) + 
+  geom_line(aes(x = duree, y = pred_mod_m1)) + facet_wrap(~ sujet, ncol=4) 
+
 #RMSE DE 0.457# IL FAUT DOONC FAIRE MIEUX 
 
 patient1<-train %>% filter(sujet %in% 1)
@@ -215,11 +236,22 @@ patients$duree=patients$Group.1
 patients=subset(patients,select=-Group.1)
 patients=subset(patients,select=-Group.2)
 
-selected=c(1,5,27,38,40,17)
+selected=c(3,7,11,17,21,31,32,41)
 patients %>% filter(sujet %in% selected) %>% 
-  ggplot() + geom_point(aes(x = genre, y = FF.Abs)) + facet_wrap(~ sujet, ncol=2)
+  ggplot() + geom_point(aes(x = duree, y = VFNL)) + facet_wrap(~ sujet, ncol=2)
 
 train %>% filter(sujet %in% selected) %>% 
   ggplot() + geom_point(aes(x = duree, y = FF.Abs)) + facet_wrap(~ sujet, ncol=2)
 
 ggplot(data = train)+geom_point(aes(x = duree, y = score))+geom_smooth()
+
+#Modèle non Mixte
+data2<-as.data.frame(train$score)
+data2$duree<-train$duree
+nlm1b <- nls(data2$`train$score` ~  a*x^2+b*x+c, data=data2, start = c(a=1,b=1,c=1), algorithm = "port")
+Rmse_1<-rmse(predict(nlm1b,data2),data2$`train$score`)
+
+
+troisieme_quartile <- quantile(train$duree, 0.75)
+valid=train[train$duree>105,]
+train=train[train$duree<=105,]
