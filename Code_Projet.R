@@ -12,6 +12,10 @@ library(gridExtra)
 library(dplyr)
 library(MASS)
 library(Matrix)
+library(tidyverse)
+library(xgboost)
+library(caret)
+library(readxl)
 
 theme_set(theme_bw())
 
@@ -108,10 +112,114 @@ train$genre=as.factor(train$genre)
 mod3=lmer(score ~ age +genre+duree+BTC1+BTC2+EFS+VFNL +(FF.Abs|  sujet), data = train, REML = FALSE) 
 RMSE3= rmse(valid$score,predict(mod3, newdata = valid))
 
-genre=train$genre
-train=subset(train,select=-genre)
-train=scale(train)
-train$genre=genre
+mod4=lmer(score ~ age +genre+duree+BTC1+BTC2+EFS+VFNL + FF.Abs +(AV.dB|  sujet), data = train, REML = FALSE) 
+RMSE4= rmse(valid$score,predict(mod4, newdata = valid))
 
-mod4=lmer(score ~ age +genre+duree+BTC1+BTC2+EFS+VFNL +(FF.Abs|  sujet), data = train, REML = FALSE) 
-RMSE4= rmse(valid$score,predict(mod3, newdata = valid))
+genre=train$genre
+sujet=train$sujet
+score=train$score
+train=subset(train,select=-genre)
+train=subset(train,select=-sujet)
+train=subset(train,select=-score)
+train=scale(train)
+train=as.data.frame(train)
+train$genre=genre
+train$sujet=sujet
+train$score=score
+
+genre=valid$genre
+sujet=valid$sujet
+score=valid$score
+valid=subset(valid,select=-genre)
+valid=subset(valid,select=-sujet)
+valid=subset(valid,select=-score)
+valid=scale(valid)
+valid=as.data.frame(valid)
+valid$genre=genre
+valid$sujet=sujet
+valid$score=score
+
+mod4=lmer(score ~ age +genre+duree+BTC1+BTC2+EFS+VFNL+AV.dB +(FF.Abs|  sujet), data = train, REML = FALSE) 
+RMSE4= rmse(valid$score,predict(mod4, newdata = valid))
+
+mod5=lmer(score ~ age +genre+duree+BTC1+BTC2+EFS+VFNL + FF.Abs +(AV.dB|  sujet), data = train, REML = FALSE) 
+RMSE5= rmse(valid$score,predict(mod5, newdata = valid))
+
+mod6=lmer(score ~ age +genre+duree+BTC1+BTC2+EFS+VFNL +(FF.Abs+AV.dB|  sujet), data = train, REML = FALSE) 
+RMSE6= rmse(valid$score,predict(mod6, newdata = valid))
+
+#TROP GROS MODELE NE CONVERGE PAS
+mod7=lmer(score ~ age +genre+duree +(FF.Abs+AV.dB+BTC1+BTC2+EFS+VFNL+CDNL|  sujet), data = train, REML = FALSE) 
+RMSE7= rmse(valid$score,predict(mod7, newdata = valid))
+
+mod8=lmer(score ~ age +genre+duree+BTC1+BTC2+EFS+VFNL+CDNL +(FF.Abs+AV.dB|  sujet), data = train, REML = FALSE) 
+RMSE8= rmse(valid$score,predict(mod8, newdata = valid))
+
+mod9=lmer(score ~ age +genre+duree+BTC1+BTC2+EFS+VFNL + FF.Abs +CDNL+(AV.dB|  sujet), data = train, REML = FALSE) 
+RMSE9= rmse(valid$score,predict(mod9, newdata = valid))
+
+mod10=lmer(score ~ age +genre+duree+BTC1+BTC2+EFS+VFNL + FF.Abs +(AV.dB|  sujet), data = train) 
+RMSE10= rmse(valid$score,predict(mod10, newdata = valid))
+
+m10update<-update(mod10, REML=FALSE)
+RMSE10_UPDATE= rmse(valid$score,predict(m10update, newdata = valid))
+
+sort(as.matrix(AIC(mod4,mod5,mod6,mod7,mod8,mod9,mod10,m10update))[,2])%>%data.frame()%>% rmarkdown::paged_table()
+sort(as.matrix(BIC(mod4,mod5,mod6,mod7,mod8,mod9,mod10,m10update))[,2])%>%data.frame()%>% rmarkdown::paged_table()
+
+mod11=lm(score ~., data = train) 
+RMSE11=rmse(valid$score,predict(mod11,newdata=valid))
+
+
+#XG BOOST
+Y_train=train$score
+X_train=subset(train,select=-score)
+Y_test=valid$score
+X_test=subset(valid,select=-score)
+
+
+xgb_trcontrol = trainControl(method = "cv", number = 5, allowParallel = TRUE, 
+                             verboseIter = FALSE, returnData = FALSE)
+
+xgbGrid <- expand.grid(nrounds = c(100,200),  
+                       max_depth = c(3, 5, 10, 15, 20),
+                       colsample_bytree = seq(0.5, 0.9, length.out = 5),
+                       ## valeurs par défaut : 
+                       eta = 0.1,
+                       gamma=0,
+                       min_child_weight = 1,
+                       subsample=1
+)
+
+xgb_model = train(X_train, Y_train, trControl = xgb_trcontrol, tuneGrid = xgbGrid, 
+                  method = "xgbTree")
+
+xgb_model$bestTune
+predicted = predict(xgb_model, X_test)
+residuals = Y_test - predicted
+RMSE = sqrt(mean(residuals^2))
+
+#RMSE DE 0.457# IL FAUT DOONC FAIRE MIEUX 
+
+patient1<-train %>% filter(sujet %in% 1)
+patient1$duree=round(patient1$duree)
+
+resultat <- aggregate(patient1[c("age","genre","score","FF","FF.Abs","FF.RAP","FF.PPQ5","FF.DDP","AV","AV.dB","AV.APQ3","AV.APQ5","AV.APQ11","AV.DDA","BTC1","BTC2","CDNL","EFS","VFNL")], by = list(patient1$duree), FUN = mean)
+ggplot(data=resultat)  + aes(x = FF.Abs, y = score) + geom_point()+geom_smooth()  
+ggplot(data=patient1)  + aes(x = FF.Abs, y = score) + geom_point()+geom_smooth()  
+
+train$duree=round(train$duree)
+patients<-aggregate(train[c("sujet","age","genre","score","FF","FF.Abs","FF.RAP","FF.PPQ5","FF.DDP","AV","AV.dB","AV.APQ3","AV.APQ5","AV.APQ11","AV.DDA","BTC1","BTC2","CDNL","EFS","VFNL")], by = list(train$duree,train$sujet), FUN = mean)
+patients$sujet=patients$Group.2
+patients$duree=patients$Group.1
+patients=subset(patients,select=-Group.1)
+patients=subset(patients,select=-Group.2)
+
+selected=c(1,5,27,38,40,17)
+patients %>% filter(sujet %in% selected) %>% 
+  ggplot() + geom_point(aes(x = genre, y = FF.Abs)) + facet_wrap(~ sujet, ncol=2)
+
+train %>% filter(sujet %in% selected) %>% 
+  ggplot() + geom_point(aes(x = duree, y = FF.Abs)) + facet_wrap(~ sujet, ncol=2)
+
+ggplot(data = train)+geom_point(aes(x = duree, y = score))+geom_smooth()
