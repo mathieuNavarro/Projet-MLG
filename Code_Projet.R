@@ -118,14 +118,17 @@ RMSE4= rmse(valid$score,predict(mod4, newdata = valid))
 genre=train$genre
 sujet=train$sujet
 score=train$score
+duree=train$duree
 train=subset(train,select=-genre)
 train=subset(train,select=-sujet)
 train=subset(train,select=-score)
+train=subset(train,select=-duree)
 train=scale(train)
 train=as.data.frame(train)
 train$genre=genre
 train$sujet=sujet
 train$score=score
+train$duree=duree
 
 genre=valid$genre
 sujet=valid$sujet
@@ -149,7 +152,7 @@ mod6=lmer(score ~ age +genre+duree+BTC1+BTC2+EFS+VFNL +(FF.Abs+AV.dB|  sujet), d
 RMSE6= rmse(valid$score,predict(mod6, newdata = valid))
 
 #TROP GROS MODELE NE CONVERGE PAS
-mod7=lmer(score ~ age +genre+duree+FF.Abs+AV.dB+BTC1+BTC2+EFS+VFNL+CDNL +(FF.Abs+AV.dB+BTC1+BTC2+EFS+VFNL+CDNL|  sujet), data = train, REML = FALSE) 
+mod7=lmer(score ~ age +genre+duree+FF.Abs+AV.dB+BTC1+BTC2+EFS+VFNL+CDNL +(duree+FF.Abs+AV.dB+BTC1+BTC2+EFS+VFNL+CDNL|  sujet), data = train, REML = FALSE) 
 RMSE7= rmse(valid$score,predict(mod7, newdata = valid))
 
 mod8=lmer(score ~ age +genre+duree+BTC1+BTC2+EFS+VFNL+CDNL +(FF.Abs+AV.dB|  sujet), data = train, REML = FALSE) 
@@ -220,6 +223,18 @@ valid %>% filter(sujet %in% selected) %>%
   ggplot() + geom_point(aes(x = duree, y = score), color="red", size=3) + 
   geom_line(aes(x = duree, y = pred_mod_m1)) + facet_wrap(~ sujet, ncol=4) 
 
+mod1=lm(score~duree,data=train)
+valid$pred_mod1=predict(mod1,valid)
+valid %>% filter(sujet %in% selected) %>% 
+  ggplot() + geom_point(aes(x = duree, y = score), color="red", size=3) + 
+  geom_line(aes(x = duree, y = pred_mod1)) + facet_wrap(~ sujet, ncol=4) 
+
+pred_mod_m1=predict(mod1,train)
+train$pred_mod_m1=pred_mod_m1
+train %>% filter(sujet %in% selected) %>% 
+  ggplot() + geom_point(aes(x = duree, y = score), color="red", size=3) + 
+  geom_line(aes(x = duree, y = pred_mod_m1)) + facet_wrap(~ sujet, ncol=4) 
+
 #RMSE DE 0.457# IL FAUT DOONC FAIRE MIEUX 
 
 patient1<-train %>% filter(sujet %in% 1)
@@ -238,10 +253,10 @@ patients=subset(patients,select=-Group.2)
 
 selected=c(3,7,11,17,21,31,32,41)
 patients %>% filter(sujet %in% selected) %>% 
-  ggplot() + geom_point(aes(x = duree, y = VFNL)) + facet_wrap(~ sujet, ncol=2)
+  ggplot() + geom_point(aes(x = duree, y = VFNL)) + geom_point(aes(x=duree,y=score),col='red')+ facet_wrap(~ sujet, ncol=2)
 
-train %>% filter(sujet %in% selected) %>% 
-  ggplot() + geom_point(aes(x = duree, y = FF.Abs)) + facet_wrap(~ sujet, ncol=2)
+patients %>% filter(sujet %in% selected) %>% 
+  ggplot() + geom_point(aes(x =VFNL, y = score)) + facet_wrap(~ sujet, ncol=2)
 
 ggplot(data = train)+geom_point(aes(x = duree, y = score))+geom_smooth()
 
