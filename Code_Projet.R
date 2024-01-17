@@ -150,7 +150,7 @@ mod6=lmer(score ~ age +genre+duree+BTC1+BTC2+EFS+VFNL +(FF.Abs+AV.dB|  sujet), d
 RMSE6= rmse(valid$score,predict(mod6, newdata = valid))
 
 #TROP GROS MODELE NE CONVERGE PAS
-mod7=lmer(score ~ age +genre+duree+FF.Abs+AV.dB+BTC1+BTC2+EFS+VFNL+CDNL +(duree+FF.Abs+AV.dB+BTC1+BTC2+EFS+VFNL+CDNL|  sujet), data = train, REML = FALSE) 
+mod7=lmer(score ~ age +genre+FF.Abs+AV.dB+BTC1+BTC2+EFS+VFNL+CDNL +(duree*inflx+FF.Abs+AV.dB+BTC1+BTC2+EFS+VFNL+CDNL|  sujet), data = train, REML = FALSE) 
 RMSE7= rmse(valid$score,predict(mod7, newdata = valid))
 
 mod8=lmer(score ~ age +genre+duree+BTC1+BTC2+EFS+VFNL+CDNL +(FF.Abs+AV.dB|  sujet), data = train, REML = FALSE) 
@@ -347,6 +347,6 @@ nlm1b <- nls(data2$`train$score` ~  a*x^2+b*x+c, data=data2, start = c(a=1,b=1,c
 Rmse_1<-rmse(predict(nlm1b,data2),data2$`train$score`)
 
 
-troisieme_quartile <- quantile(train$duree, 0.75)
-valid=train[train$duree>105,]
-train=train[train$duree<=105,]
+troisieme_quartile <- quantile(train2$duree, 0.75)
+valid=train2[train2$duree>105,]
+train=train2[train2$duree<=105,]
