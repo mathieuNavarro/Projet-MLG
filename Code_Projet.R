@@ -103,7 +103,7 @@ ggplot(data=train)  + aes(x = AV, y = AV.DDA) + geom_point()+geom_smooth()
 
 selected=c(1,5,27,38,40,17)
 train %>% filter(sujet %in% selected) %>% 
-  ggplot() + geom_point(aes(x = AV, y = score)) + facet_wrap(~ sujet, ncol=2)
+  ggplot() + geom_point(aes(x = duree, y = score)) + facet_wrap(~ sujet, ncol=2)
 
 ggplot(data=train)  + aes(x = BTC1, y = BTC2) + geom_point()+geom_smooth()
 
@@ -118,17 +118,15 @@ RMSE4= rmse(valid$score,predict(mod4, newdata = valid))
 genre=train$genre
 sujet=train$sujet
 score=train$score
-duree=train$duree
 train=subset(train,select=-genre)
 train=subset(train,select=-sujet)
 train=subset(train,select=-score)
-train=subset(train,select=-duree)
 train=scale(train)
 train=as.data.frame(train)
 train$genre=genre
 train$sujet=sujet
 train$score=score
-train$duree=duree
+
 
 genre=valid$genre
 sujet=valid$sujet
@@ -237,8 +235,90 @@ train %>% filter(sujet %in% selected) %>%
 
 #RMSE DE 0.457# IL FAUT DOONC FAIRE MIEUX 
 
-patient1<-train %>% filter(sujet %in% 1)
-patient1$duree=round(patient1$duree)
+
+
+#TEST DE METTRE LA DUREE DANS LE LMER
+#___________________________________________________________#
+moment_inflexion=numeric(42)
+
+for (i in 1:42){
+  patient<-train %>% filter(sujet ==i)
+  patient$duree=round(patient$duree)
+  patient <- aggregate(patient[c("age","genre","score","FF","FF.Abs","FF.RAP","FF.PPQ5","FF.DDP","AV","AV.dB","AV.APQ3","AV.APQ5","AV.APQ11","AV.DDA","BTC1","BTC2","CDNL","EFS","VFNL")], by = list(patient$duree), FUN = mean)
+  names(patient)[names(patient) == "Group.1"] <- "duree"
+  coeff_directeur <- numeric(0)
+  for (j in 1:(length(patient$duree)-1)) {
+    coeff_directeur <- c(coeff_directeur, (patient$score[j+1] - patient$score[j]) / (patient$duree[j+1] - patient$duree[j]))
+  }
+  variations=abs(diff(coeff_directeur))
+  indice_max_variation_patient <- which.max(variations)
+  moment_inflexion[i]=patient$duree[indice_max_variation_patient]
+}
+
+train2<-train
+train2 <- train2 %>%
+  group_by(sujet) %>%
+  mutate(inflexion = moment_inflexion[sujet]) %>%
+  ungroup()
+
+train2$inflx=(train2$duree>train2$inflexion)
+train2=subset(train2,select=-inflexion)
+train2$inflx=as.numeric(train2$inflx)
+
+mydata_split <- initial_split(train2, prop = .7)
+train <- training(mydata_split)
+valid  <- testing(mydata_split)
+
+genre=train$genre
+sujet=train$sujet
+score=train$score
+inflx=train$inflx
+train=subset(train,select=-genre)
+train=subset(train,select=-sujet)
+train=subset(train,select=-score)
+train=subset(train,select=-inflx)
+train=scale(train)
+train=as.data.frame(train)
+train$genre=genre
+train$sujet=sujet
+train$score=score
+train$inflx=inflx
+
+
+genre=valid$genre
+sujet=valid$sujet
+score=valid$score
+inflx=valid$inflx
+valid=subset(valid,select=-genre)
+valid=subset(valid,select=-sujet)
+valid=subset(valid,select=-score)
+valid=subset(valid,select=-inflx)
+valid=scale(valid)
+valid=as.data.frame(valid)
+valid$genre=genre
+valid$sujet=sujet
+valid$score=score
+valid$inflx=inflx
+
+mod_fin=lmer(score ~ age +genre+FF.Abs+AV.dB+BTC1+BTC2+EFS+VFNL+CDNL +(duree+FF.Abs+AV.dB+BTC1+BTC2+EFS+VFNL+CDNL|  sujet:inflx), data = train, REML = FALSE) 
+RMSE_fin= rmse(valid$score,predict(mod_fin, newdata = valid))
+
+valid$pred_mod_m1 <- predict(mod_fin,newdata=valid)
+
+valid %>% filter(sujet %in% selected) %>% 
+  ggplot() + geom_point(aes(x = duree, y = score), color="red", size=3) + 
+  geom_line(aes(x = duree, y = pred_mod_m1)) + facet_wrap(~ sujet, ncol=4) 
+
+
+train$pred_mod_m1 <- fitted(mod_fin)
+
+train %>% filter(sujet %in% selected) %>% 
+  ggplot() + geom_point(aes(x = duree, y = score), color="red", size=3) + 
+  geom_line(aes(x = duree, y = pred_mod_m1)) + facet_wrap(~ sujet, ncol=4) 
+
+
+#__________________________________________________________#
+patient17$duree=round(patient1$duree)
 
 resultat <- aggregate(patient1[c("age","genre","score","FF","FF.Abs","FF.RAP","FF.PPQ5","FF.DDP","AV","AV.dB","AV.APQ3","AV.APQ5","AV.APQ11","AV.DDA","BTC1","BTC2","CDNL","EFS","VFNL")], by = list(patient1$duree), FUN = mean)
 ggplot(data=resultat)  + aes(x = FF.Abs, y = score) + geom_point()+geom_smooth()  
