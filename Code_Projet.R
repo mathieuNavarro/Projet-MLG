@@ -189,6 +189,7 @@ Y_test=valid$score
 X_test=subset(valid,select=-score)
 
 
+
 xgb_trcontrol = trainControl(method = "cv", number = 5, allowParallel = TRUE, 
                              verboseIter = FALSE, returnData = FALSE)
 
@@ -301,7 +302,7 @@ valid$score=score
 valid$inflx=inflx
 
 mod_fin=lmer(score ~ age +genre+FF.Abs+AV.dB+BTC1+BTC2+EFS+VFNL+CDNL +(duree+FF.Abs+AV.dB+BTC1+BTC2+EFS+VFNL+CDNL|  sujet:inflx), data = train, REML = FALSE) 
-RMSE_fin= rmse(valid$score,predict(mod_fin, newdata = valid))
+RMSE_fin2= rmse(valid$score,predict(mod_fin, newdata = valid))
 
 valid$pred_mod_m1 <- predict(mod_fin,newdata=valid)
 
