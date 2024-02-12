@@ -4,26 +4,999 @@ output: html_document
 date: "2024-01-17"
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+# Introduction
+
+Le projet repose sur l'analyse d'un jeu de données biomédicales comprenant des mesures recueillies auprès de 42 individus atteints d'une maladie dégénérative à un stade précoce. Ces personnes ont été recrutées pour participer à un essai clinique d'une durée de six mois visant à évaluer l'efficacité d'un dispositif de télésurveillance dans le suivi à distance de l'évolution de leurs symptômes au fil du temps.
+
+L'objectif principal de ce projet est de développer un modèle prédictif du score clinique ('score') des patients. Ce score, représentatif de l'évolution de la maladie, est influencé par une combinaison complexe de facteurs biologiques, médicaux et temporels.
+
+Ainsi, le but de cette étude est de construire un modèle capable de prédire le score clinique en fonction du temps écoulé depuis le recrutement dans l'essai (variable 'duree'), ainsi que potentiellement d'autres variables contenues dans le jeu de données. La variable 'duree' est une composante essentielle de l'étude, car elle permet de capturer l'évolution temporelle des symptômes des patients et constitue donc un indicateur crucial pour prédire le score clinique.
+
+Dans ce contexte, en utilisant des modèles prédictifs, nous chercherons à améliorer la compréhension de l'évolution de la maladie et à fournir des outils utiles pour le suivi et la gestion des patients dans un cadre clinique.
+
+# Observation et préparation des données 
+
+## Installation des packages nécessaires
+
+Dans un premier temps, nous installons les packages qui nous seront utiles durant le projet. 
+Nous aurons notament besoin des fonctions de R-base et de stats (préchargées), ainsi que les paquets de tidyverse pour la représentation et la manipulation des données. 
+
+```{r}
+
+# Installation des packages 
+
+rm(list=ls())
+library(tidyverse)
+library(lme4) # lmer(): To fit mixed-model
+library(lmerTest) # lmer (): To fit mixed-model and diplay p-values
+library(nlme) # To fit mixed-model
+library(lattice) # To plot mixed-model
+library(nlme) 
+library(plotly)
+library(ggplot2)
+library(Metrics)
+library(gridExtra)
+library(dplyr)
+library(MASS)
+library(Matrix)
+library(tidyverse)
+library(xgboost)
+library(caret)
+library(readxl)
+library(kableExtra)
+library(knitr)
+library(corrplot)
+install.packages("tidymodels") #division du jeu de données
+library(tidymodels)
 ```
 
-## R Markdown
+Pour garantir la reproductibilité des résultats lors de l'utilisation de fonctions aléatoires, nous fixons la graine du générateur de nombres aléatoires.
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+```{r}
+theme_set(theme_bw())
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
+set.seed(2023)
 ```
 
-## Including Plots
+## Observation des données 
 
-You can also embed plots, for example:
+Nous téléchargeons les données et les affichons sous forme de tableau, pour en avoir un premier aperçu.
+On importe aussi l'ensemble de test qui nous servira dans un second temps, pour la prédiction. 
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+```{r}
+train <- read.csv('/Users/victoire/Desktop/METH REG° ET CLASS°/Projet/Projet 2023:2024/train_maladie.csv', header = T, sep = ",",dec=".")
+testX <- read.csv('/Users/victoire/Desktop/METH REG° ET CLASS°/Projet/Projet 2023:2024/test_X_maladie.csv', header = T, sep = ",",dec=".")
+
+train%>% rmarkdown::paged_table()
+```
+Nous pouvons remarquer que, pour un même sujet, nous avons plusieurs lignes. Affichons alors les données d'un seul individu (par exemple l'individu numéro $1$) pour mieux comprendre. Nous reagrdons aussi la dimension du tabelau ainsi obtenu pour voir combien de données nous avons sur cet individu. 
+
+```{r}
+# Sélection des lignes où la colonne "sujet" vaut 1
+subset_data <- subset(train, sujet == 1)
+
+# Affichage du sous tableau
+subset_data%>% rmarkdown::paged_table()
+
+# Création d'un dataframe contenant les dimensions
+dim_subset <- data.frame(dim(subset_data)) 
+rownames(dim_subset) <- c("Nombre de lignes","Nombre de colonnes") # Nom des lignes du tableau
+colnames(dim_subset) <- c("") # Nom de la colonne du tableau
+
+# Affichage des dimensions du jeu de données sélectionné dans un tableau
+dim_subset %>% 
+  kbl(caption = "Dimension du jeu de données (sujet == 1)") %>%
+  kable_styling() 
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+Pour un seul individu, nous avons $114$ lignes avec $21$ variables pour chacune d'elle. Nous pouvons remarquer une redondance : nous observons 6 cycles de 19 'durées'. Les 19 premières lignes correspondent à des 'durées' différentes et donc des 'scores' différents. Puis, à la ligne 20 on observe la même durée qu'à la première ligne avec les mêmes scores. On observe ce phénomène pour toutes les 'durées'.  En général, une même 'durée' pour un même individu est associée à un même score, bien que de légères variations puissent être observées pour certaines durées
+Nous traiterons cette spécificité au cours du projet, même si nous commencerons par créer des modèles sans y preter attention. 
+
+On affiche aussi la dimension du jeu de données de l'ensemble d'entrainement : 
+```{r}
+# Création d'un dataframe contenant les dimensions 
+dim <- data.frame(dim(train)) 
+rownames(dim) <- c("Nombre de lignes","Nombre de colonnes") # Nom des lignes du tableau
+colnames(dim) <- c("") # Nom de la colonne du tableau
+
+# Affichage des dimensions du jeu de données dans un tableau
+dim %>% 
+  kbl(caption = "Dimension du jeu de données") %>%
+  kable_styling() 
+```
+Le jeu de données comporte 4388 lignes, c'est-à-dire 4388 observations et 21 colonnes, c'est-à-dire 21 variables. 20 d'entre elles sont les variables explicatives et la dernière est la variable cible (la variable 'score' comme vu en introduction). Comme observé juste au-dessus, les 4388 lignes ne correspondent pas à 4388 individus car à chaque individu est associé plusieurs lignes. Par exemple, pour le patient 1, nous avons 114 lignes qui lui sont asssociées. Si c'est le cas pour chaque individu, nous avons $\frac{4388}{114} = 38$ individus. En réalité, il y en a $42$.
+
+Regardons combien de mesures ont été réalisées sur chaque individu, pour être sur que nous n'avons pas des individus avec très peu de mesure comparer aux autres. Affichons aussi le nombre de cycle par individus.
+
+```{r}
+# faire le code
+```
+
+
+On regarde ensuite le type des variables (grâce à la fonction \texttt{str}), pour savoir si elles sont numériques ou catégorielles, bien qu'on en ait déjà une idée grâce à l'affichage du jeu de données.On regarde aussi le support des variables (grâce à la fonction \texttt{summary}).  
+Le tableau suivant présente une description récapitulative des variables. On pourra trouver une description plus détaillée de celles-ci dans la notice du projet.
+
+
+```{r}
+# Affichage des informations sur le type des données
+str(train)
+summary(train)
+```
+
+```{r}
+#install.packages(summarytools)
+#library(summarytools)
+#dfSummary(train)
+```
+
+```{r}
+# Création du dataframe avec les informations sur les variables
+variables_df <- data.frame(
+  Variable = c("sujet", "age", "genre", "duree", "score", "FF, FF.Abs, FF.RAP, FF.PPQ5, FF.DDP", 
+               "AV, AV.dB, AV.APQ3, AVAPQ5, AV.APQ11, AV.DDA", "BTC1, BTC2", "CDNL", "EFS", "VFNL"),
+  Description = c("Numéro du patient", "Age du patient", "Sexe du patient", 
+                  "Temps écoulé depuis le recrutement dans l’essai", "Score clinique", 
+                  "5 mesures de la variation de la fréquence fondamentale (FF) de la voix", 
+                  "6 mesures de la variation de l’amplitude de la voix (AV)", 
+                  "2 mesures du rapport entre le bruit et les composantes tonales de la voix", 
+                  "Une mesure de complexité dynamique non linéaire", 
+                  "Exposant d’échelle fractale du signal", 
+                  "Une mesure non linéaire de la variation de la fréquence fondamentale"),
+  Type = c("Catégorielle", "Numérique", "Catégorielle", rep("Numérique", 8)),
+  Support = c("⟦1; 42⟧", "⟦36; 85⟧", "{0, 1}", "[-4; 138]", "[5; 38]", "[2.25e-06; 0.173]", 
+              "[0.0019; 2.107]", "[0.0002; 38]", "[0.151; 0.97]", "[0.5; 0.87]", "[0.02; 0.74]")
+)
+
+# Affichage du tableau avec kable
+kable(variables_df, 
+      caption = "Définition des variables", 
+      format = "markdown",
+      col.names = c("Variable", "Description", "Type", "Support"),
+      align = c("l", "l", "l", "l"),
+      booktabs=TRUE)
+```
+Les variables sont donc toutes numériques sauf les variables 'sujet' et 'genre'. 
+
+Premièrement, il est crucial de prendre en compte le support de la variable cible 'score', qui est défini sur $[5 ; 38]$. Cette plage de valeurs détermine la fourchette dans laquelle nos prédictions doivent se situer pour être considérées comme précises. Pour évaluer nos modèles, nous allons princiâlement utiliser la RMSE (racine de l'erreur quadratique moyenne). Par conséquent, la RMSE de nos modèles doit être adaptée à l'odre de grandeur de ce support. En d'autres termes, elle doit être suffisamment faible pour refléter la précision nécessaire pour prédire les valeurs de 'score' avec une marge d'erreur acceptable dans cette plage de valeurs.
+
+De plus, l'affichage du résumé de chaque variable nous permet de remarquer que le jeu de donénes présente des valeurs abérantes. En effet, par exemple, le minimum de la variable 'durée' est négatif, ce qui est aberrant. Nous traiterons ces valeurs dans une section ultérieure. 
+
+## Valeurs manquantes 
+
+On vérifie s'il y a des valeurs manquantes. Si c'est le cas, il faudra y remédier. 
+Le tableau ci-dessous affiche le nombre de valeur manquante par variable.
+
+```{r}
+# Vérification des valeurs manquantes dans le dataframe
+val_manquantes <- sapply(train, function(x) sum(is.na(x)))
+
+# Affichage du nombre de valeurs manquantes par variable dans un tableau
+val_manq <- data.frame(val_manquantes) # Création d'un dataframe avec le nombre de valeurs manquantes
+colnames(val_manq) <- c("Nombre de valeur manquante") # Nom de la colonne du tableau
+val_manq %>% 
+  kbl(caption = "Nombre de valeur manquante par variable") %>% # Titre
+  kable_styling() # Mise en page et style du tableau
+```
+Il n'y a donc pas de valeurs manquantes dans notre jeu de données.
+
+## Distribution des variables 
+
+### Distribution des variables catégorielles
+
+On affiche la distribution de la variable catégorielle 'genre'. Cela va nous permettre d'observer les catégories de variable qui prédominent par rapport aux autres catégories de cette même variable. 
+
+```{r}
+# Sélectionner les colonnes pertinentes
+donnees_genre <- train[, c("sujet", "genre")]
+
+# Supprimer les doublons pour obtenir une seule ligne par patient
+df_genre <- unique(donnees_genre)
+
+# Créer un histogramme avec les catégories légendées
+barplot(table(df_genre[["genre"]]), 
+        col = c("lightblue", "pink"), # Couleur des barres (bleu pour les hommes, rose pour les femmes)
+        main = "Distribution des genres", # Titre de l'histogramme
+        ylab = "Nombre d'individus", # Nom de l'axe des ordonnées
+        legend.text = c("Homme", "Femme"), # Légende pour les catégories
+        args.legend = list(x = "topright")) # Position de la légende
+```
+On remarque qu'il y a deux fois plus d'hommes que de femmes dans notre jeu de données. 
+
+### Distribution des variables numériques
+
+On regarde maintenant la distribution des variables numériques. On trace un histogramme et le boxplot asssocié pour chaque variable. Le boxplot nous permet d'avoir la moyenne de chaque variable et d'observer les éventuelles valeurs aberrantes. 
+
+```{r}
+# Création d'un vecteur avec les variables numériques 
+numerical_var_1 <- c("age", "duree", "score")
+
+# Création de listes pour les histogrammes et les boxplots
+hist_plots <- list()
+box_plots <- list()
+
+# Boucle pour créer les histogrammes et les boxplots pour chaque variable numérique
+for (var in numerical_var_1) {
+  # Histogramme
+  histo <- ggplot(train, aes(x = .data[[var]])) + 
+    geom_histogram(fill = "lightblue", # Couleur de remplissage
+                   color = "black", # Couleur des contours 
+                   bins = 20, # Nombre de catégories
+                   alpha = 0.7, # Transparence de la couleur de remplissage
+                   linewidth = 0.2) + # Épaisseur des contours
+    labs(title = paste("Distribution de", var), # Titre des histogrammes 
+         x = var, # Nom de l'axe des abscisses 
+         y = "Nombre") + # Nom de l'axe des ordonnées 
+    theme(plot.title = element_text(hjust = 0.5, # Position du titre 
+                                  size = 7, # Taille du titre
+                                  face = "bold"), # Titre en gras
+        axis.title.x = element_text(size = 7), # Taille du nom de l'axe des abscisses
+        axis.title.y = element_text(size = 7))  # Taille du nom de l'axe des ordonnée 
+
+  # Boxplot
+  boxplot <- ggplot(train, aes(x = 1, y = .data[[var]])) +
+    geom_boxplot(linewidth = 0.3, # Épaisseur des contours
+                 outlier.size = 0.2) + # Taille des outliers 
+    labs(title = paste("Boxplot de", var)) + # Titre des boxplots
+    theme(plot.title = element_text(hjust = 0.5, # Position du titre 
+                                  size = 7, # Taille du titre
+                                  face = "bold"), # Titre en gras
+        axis.title.x = element_text(size = 7), # Taille du nom de l'axe des abscisses
+        axis.title.y = element_text(size = 7)) # Taille du nom de l'axe des ordonnée 
+
+  # Stockage des histogrammes et des boxplots dans les listes 
+  hist_plots[[var]] <- histo
+  box_plots[[var]] <- boxplot
+}
+
+# Organisation des graphiques dans une grille 5x2
+grid.arrange(grobs = c(hist_plots, box_plots), 
+             ncol = 3, 
+             top = "Histogrammes et boxplots des variables numériques age, durée et score") # Titre 
+```
+On remarque que : 
+• la plupart des individus ont entre 55 et 75 ans
+• les durées sont globalement uniformément réparties entre 0 et 140, nous les analysons plus en détails juste en dessous
+• la plupart des scores sont entre 10 et 20 et 25, 33. Ils sont en moyenne autour de 20. 
+
+Regardons de plus près la variable 'durée' et analysons si les mesures ont été faites au même moment pour chaque individu. Pour une meilleure visisbilité, nous affichons en rouge les mesures faite après une durée supérieure à 15 depuis la précédente mesure. (ie les individus pour lesqeulles des mesures ont été sauté)  
+
+
+```{r}
+# Création d'un dataframe avec les durées arrondies à l'unité pour chaque individu
+rounded_durations <- data.frame(sujet = train$sujet, rounded_duration = round(train$duree))
+
+# Supprimer les doublons pour chaque sujet (garder uniquement une seule observation par sujet)
+unique_rounded_durations <- unique(rounded_durations)
+
+# Trier les données par sujet et durée arrondie à l'unité
+unique_rounded_durations <- unique_rounded_durations[order(unique_rounded_durations$sujet, unique_rounded_durations$rounded_duration), ]
+
+# Calculer les écarts entre les durées successives pour chaque sujet
+unique_rounded_durations$ecart <- ave(unique_rounded_durations$rounded_duration, unique_rounded_durations$sujet, FUN = function(x) c(NA, diff(x)))
+
+# Création du graphique en nuage de points avec distinction en rouge des écarts supérieurs à 15
+ggplot(unique_rounded_durations, aes(x = factor(sujet), y = rounded_duration, color = ecart > 15)) +
+  geom_point() +
+  scale_color_manual(values = c("black", "red"), labels = c("False", "True")) +
+  labs(title = "Durées Arrondies à l'Unité par Individu",
+       x = "Sujet",
+       y = "Durée Arrondie à l'Unité",
+       color = "Écart > 15") +
+  theme_minimal()
+
+```
+Les mesures ont globalement été prises au même moment pour chaque individu. Cependant, nous pouvons remarquer que certains individus ont des mesures en moins. Par exemple, pour les individus 13 et 14, il n'y a pas eu de mesures prises entre les temps 75 et 100 contrairement à la plupart des autres individus.  
+
+Pour ce qui concerne les scores, on peut regarder les moyennes par individu, pour voir si elles sont globalement pareilles. On ajoute le facteur 'genre' en couleur pour voir si celui-ci a un impact sur la moyenne des scores. 
+
+```{r}
+# Calculer les moyennes des scores par individu en tenant compte du genre
+mean_scores <- aggregate(score ~ sujet + genre, data = train, FUN = mean)
+
+# Créer le graphique des moyennes des scores par individu avec la variable genre
+ggplot(mean_scores, aes(x = factor(sujet), y = score, color = as.factor(genre))) +
+  geom_point() +
+  labs(title = "Moyennes des Scores par Individu",
+       x = "Sujet",
+       y = "Moyenne des Scores") +
+  theme_minimal()
+
+```
+Il semble y avoir autant d'individus ayant une moyenne de score inférieure à 20 que supérieure à 20. Vérifions cette hypothèses avec un boxplot : 
+
+```{r}
+# Ajouter une colonne indiquant si la moyenne est inférieure ou égale à 20
+mean_scores$score_cat <- ifelse(mean_scores$score <= 20, "<= 20", "> 20")
+
+# Créer un barplot comptant le nombre de moyennes de score en dessous et au-dessus de 20
+ggplot(mean_scores, aes(x = score_cat)) +
+  geom_bar(fill = "lightblue", color = "black") +
+  labs(title = "Nombre de Moyennes de Score", x = "Score", y = "Nombre") +
+  theme_minimal()
+```
+
+```{r}
+# Création d'un vecteur avec les variables numériques 
+numerical_var_2 <- c("FF", "FF.Abs", "FF.RAP", "FF.PPQ5", "FF.DDP")
+
+# Création de listes pour les histogrammes et les boxplots
+hist_plots <- list()
+box_plots <- list()
+
+# Boucle pour créer les histogrammes et les boxplots pour chaque variable numérique
+for (var in numerical_var_2) {
+  # Histogramme
+  histo <- ggplot(train, aes(x = .data[[var]])) + 
+    geom_histogram(fill = "lightblue", # Couleur de remplissage
+                   color = "black", # Couleur des contours 
+                   bins = 20, # Nombre de catégories
+                   alpha = 0.7, # Transparence de la couleur de remplissage
+                   linewidth = 0.2) + # Épaisseur des contours
+    labs(title = paste("Distribution de", var), # Titre des histogrammes 
+         x = var, # Nom de l'axe des abscisses 
+         y = "Nombre") + # Nom de l'axe des ordonnées 
+    theme(plot.title = element_text(hjust = 0.5, # Position du titre 
+                                  size = 7, # Taille du titre
+                                  face = "bold"), # Titre en gras
+        axis.title.x = element_text(size = 7), # Taille du nom de l'axe des abscisses
+        axis.title.y = element_text(size = 7))  # Taille du nom de l'axe des ordonnée 
+
+  # Boxplot
+  boxplot <- ggplot(train, aes(x = 1, y = .data[[var]])) +
+    geom_boxplot(linewidth = 0.3, # Épaisseur des contours
+                 outlier.size = 0.2) + # Taille des outliers 
+    labs(title = paste("Boxplot de", var)) + # Titre des boxplots
+    theme(plot.title = element_text(hjust = 0.5, # Position du titre 
+                                  size = 7, # Taille du titre
+                                  face = "bold"), # Titre en gras
+        axis.title.x = element_text(size = 7), # Taille du nom de l'axe des abscisses
+        axis.title.y = element_text(size = 7)) # Taille du nom de l'axe des ordonnée 
+
+  # Stockage des histogrammes et des boxplots dans les listes 
+  hist_plots[[var]] <- histo
+  box_plots[[var]] <- boxplot
+}
+
+# Organisation des graphiques dans une grille 5x2
+grid.arrange(grobs = c(hist_plots, box_plots), 
+             ncol = 5, 
+             top = "Histogrammes et boxplots des mesures des variations de la fréquence fondamentale (FF) de la voix") # Titre 
+```
+On remarque que, en grande majorité, les variations de la fréquence fondamentale (FF) de la voix sont positives et très proches de 0. 
+
+```{r}
+# Création d'un vecteur avec les variables numériques 
+numerical_var_3 <- c("AV", "AV.dB", "AV.APQ3", "AV.APQ5", "AV.APQ11", "AV.DDA")
+
+# Création de listes pour les histogrammes et les boxplots
+hist_plots <- list()
+box_plots <- list()
+
+# Boucle pour créer les histogrammes et les boxplots pour chaque variable numérique
+for (var in numerical_var_3) {
+  # Histogramme
+  histo <- ggplot(train, aes(x = .data[[var]])) + 
+    geom_histogram(fill = "lightblue", # Couleur de remplissage
+                   color = "black", # Couleur des contours 
+                   bins = 20, # Nombre de catégories
+                   alpha = 0.7, # Transparence de la couleur de remplissage
+                   linewidth = 0.2) + # Épaisseur des contours
+    labs(title = paste("Distribution de", var), # Titre des histogrammes 
+         x = var, # Nom de l'axe des abscisses 
+         y = "Nombre") + # Nom de l'axe des ordonnées 
+    theme(plot.title = element_text(hjust = 0.5, # Position du titre 
+                                  size = 7, # Taille du titre
+                                  face = "bold"), # Titre en gras
+        axis.title.x = element_text(size = 7), # Taille du nom de l'axe des abscisses
+        axis.title.y = element_text(size = 7))  # Taille du nom de l'axe des ordonnée 
+
+  # Boxplot
+  boxplot <- ggplot(train, aes(x = 1, y = .data[[var]])) +
+    geom_boxplot(linewidth = 0.3, # Épaisseur des contours
+                 outlier.size = 0.2) + # Taille des outliers 
+    labs(title = paste("Boxplot de", var)) + # Titre des boxplots
+    theme(plot.title = element_text(hjust = 0.5, # Position du titre 
+                                  size = 7, # Taille du titre
+                                  face = "bold"), # Titre en gras
+        axis.title.x = element_text(size = 7), # Taille du nom de l'axe des abscisses
+        axis.title.y = element_text(size = 7)) # Taille du nom de l'axe des ordonnée 
+
+  # Stockage des histogrammes et des boxplots dans les listes 
+  hist_plots[[var]] <- histo
+  box_plots[[var]] <- boxplot
+}
+
+# Organisation des graphiques dans une grille 5x2
+grid.arrange(grobs = c(hist_plots, box_plots), 
+             ncol = 6, 
+             top = "Histogrammes et boxplots des mesures des varaitions de l'amplitude de la voix") # Titre 
+```
+De même que les variations de la fréquence fondamentale (FF) de la voix, les varaitions de l'amplitude de celle-ci sont aussi très proches de 0. 
+
+```{r}
+# Création d'un vecteur avec les variables numériques 
+numerical_var_4 <- c("BTC1", "BTC2", "CDNL", "EFS", "VFNL")
+
+# Création de listes pour les histogrammes et les boxplots
+hist_plots <- list()
+box_plots <- list()
+
+# Boucle pour créer les histogrammes et les boxplots pour chaque variable numérique
+for (var in numerical_var_4) {
+  # Histogramme
+  histo <- ggplot(train, aes(x = .data[[var]])) + 
+    geom_histogram(fill = "lightblue", # Couleur de remplissage
+                   color = "black", # Couleur des contours 
+                   bins = 20, # Nombre de catégories
+                   alpha = 0.7, # Transparence de la couleur de remplissage
+                   linewidth = 0.2) + # Épaisseur des contours
+    labs(title = paste("Distribution de", var), # Titre des histogrammes 
+         x = var, # Nom de l'axe des abscisses 
+         y = "Nombre") + # Nom de l'axe des ordonnées 
+    theme(plot.title = element_text(hjust = 0.5, # Position du titre 
+                                  size = 7, # Taille du titre
+                                  face = "bold"), # Titre en gras
+        axis.title.x = element_text(size = 7), # Taille du nom de l'axe des abscisses
+        axis.title.y = element_text(size = 7))  # Taille du nom de l'axe des ordonnée 
+
+  # Boxplot
+  boxplot <- ggplot(train, aes(x = 1, y = .data[[var]])) +
+    geom_boxplot(linewidth = 0.3, # Épaisseur des contours
+                 outlier.size = 0.2) + # Taille des outliers 
+    labs(title = paste("Boxplot de", var)) + # Titre des boxplots
+    theme(plot.title = element_text(hjust = 0.5, # Position du titre 
+                                  size = 7, # Taille du titre
+                                  face = "bold"), # Titre en gras
+        axis.title.x = element_text(size = 7), # Taille du nom de l'axe des abscisses
+        axis.title.y = element_text(size = 7)) # Taille du nom de l'axe des ordonnée 
+
+  # Stockage des histogrammes et des boxplots dans les listes 
+  hist_plots[[var]] <- histo
+  box_plots[[var]] <- boxplot
+}
+
+# Organisation des graphiques dans une grille 5x2
+grid.arrange(grobs = c(hist_plots, box_plots), 
+             ncol = 5, 
+             top = "Histogrammes et boxplots des autres variables numériques") # Titre 
+```
+COMMENTER 
+
+## Valeurs aberrantes 
+
+En affichant un résumé des variables, on peut observer certaines valeurs abearrantes. Par exemple, le minimum de la variable 'durée' est négatif, ce qui est imposssible. On décide de supprimer ces valeurs aberrantes. 
+
+
+AUTRES VAL ABERRANTES ??
+
+```{r}
+# Suppression des lignes avec des valeurs négatives dans la colonne "duree"
+train <- train[train$duree >= 0, ]
+
+# Vérification
+summary(train$duree)
+```
+
+## Corrélation entre les variables
+
+On étudie maintenant s'il y a des corrélations entre les variables explicatives.
+On affiche pour cela la matrice des corrélations sous forme de graphique corrplot.
+
+```{r}
+# Plot des corrélations entre les variables explicatives 
+corrplot(cor(train[, 1:21]), method = "color")
+```
+On observe que beaucoup de variables sont très corrélées.
+On affiche la matrice des corrélations pour voir plus précisément les coefficients de corrélations. 
+Les coefficients dont la valeur absolue est supérieure à 0.6 sont affichés en rouge. 
+
+```{r}
+# Calcul des corrélations entre les variables explicatives
+correlation_matrix <- cor(train[, 1:21])
+
+# Fonction pour formater les coefficients de corrélation (pour colorer les coefficients dont la valeur absolue est supérieure à 0.35 et arrondir les coefficients au centième près)
+format_correlation <- function(x) {
+  if (abs(x) > 0.6) {
+    paste0("<span style='color: red; font-weight: bold;'>", round(x, 2), "</span>")
+  } else {
+    round(x, 2)
+  }
+}
+
+# Application de la fonction de formatage à la matrice de corrélation
+formatted_correlation_matrix <- apply(correlation_matrix, 1, function(row) {
+  sapply(row, format_correlation)
+})
+
+# Affichage de la matrice de corrélation avec la mise en forme personnalisée
+kable(formatted_correlation_matrix, 
+      format = "html", 
+      escape = FALSE) %>%
+  kable_styling()
+
+```
+Naturellement, la matrice nous mène à la même conclusion que le graphique : il y a beaucoup de variables très corrélées.
+Les variables de mesures de la variation de la fréquence fondamentale (FF) de la voix ainsi que celles de mesures de la variation de l’amplitude de la voix sont très fortement corrélées entre elles. Les variables "BTC1", "BTC2" et "VFNL" le sont aussi. 
+
+On étudie graphiquement la relation entre les variables des couples les plus corrélés, pour avoir un représentation plus visuelle de celle-ci. 
+
+CE CODE AFFICHE TROP DE GRAPHE À GARDER ? 
+```{r}
+# Matrice de corrélation
+cor_matrix <- cor(train[, -c(1, 3)])
+
+# Trouver les indices des paires de variables très corrélées
+high_cor_indices <- which(cor_matrix > 0.9 & cor_matrix != 1, arr.ind = TRUE)
+
+# Récupérer les noms des variables corrélées
+var_names <- rownames(cor_matrix)
+
+# Parcourir les indices pour afficher les graphiques
+for (i in 1:nrow(high_cor_indices)) {
+    index_row <- high_cor_indices[i, 1]
+    index_col <- high_cor_indices[i, 2]
+    
+    var1 <- var_names[index_row]
+    var2 <- var_names[index_col]
+    
+    plot(train[[var1]], train[[var2]], 
+         main = paste("Corrélation entre", var1, "et", var2),
+         xlab = var1, ylab = var2)
+    
+    # Ajouter la courbe de régression linéaire
+    abline(lm(train[[var2]] ~ train[[var1]]), col = "red")
+}
+```
+On a beaucoup de variables très corrélées, si on affiche les graphes de tous les couples très corrélés, on en aurait beaucoup trop. On décide d'en choisir certains.
+
+```{r}
+ggplot(data=train)  + aes(x = FF, y = FF.Abs) + geom_point() + geom_smooth()
+
+ggplot(data=train) + aes(x = FF, y = FF.RAP) + geom_point() + geom_smooth()
+
+ggplot(data=train) + aes(x = FF, y = FF.PPQ5) + geom_point() + geom_smooth()
+
+ggplot(data=train) + aes(x = FF, y = FF.DDP) + geom_point() + geom_smooth()
+```
+```{r}
+selected=c(1,5,27,38,40,17)
+train %>% filter(sujet %in% selected) %>% 
+  ggplot() + geom_point(aes(x = FF.Abs, y = score)) + facet_wrap(~ sujet, ncol=2)
+```
+
+
+```{r}
+ggplot(data=train)  + aes(x = AV, y = AV.dB) + geom_point() + geom_smooth()
+
+ggplot(data=train) + aes(x = AV,y = AV.APQ3) + geom_point() + geom_smooth()
+
+ggplot(data=train)  + aes(x = AV, y = AV.APQ5) + geom_point() + geom_smooth()
+
+ggplot(data=train)  + aes(x = AV, y = AV.APQ11) + geom_point()+ geom_smooth()
+
+ggplot(data=train)  + aes(x = AV, y = AV.DDA) + geom_point() + geom_smooth()
+```
+
+```{r}
+ggplot(data=train)  + aes(x = BTC1, y = BTC2) + geom_point() + geom_smooth()
+```
+Ces graphes font clairement apparaître les relations, pour la plupart croissantes et linéaires, entre les variables. Nous allons donc supprimer certaines de ces variables. En effet, retirer des variables trop corrélées permet de : 
+• réduire la sensibilité des coefficients aux petites variations dans les données,
+• simplifier le modèle et faciliter son interprétation, 
+• réduire le risque de surajustement et améliorer la généralisation du modèle
+• réduire le temps nécessaire pour entraîner et tester le modèle (car moins de variables signifie moins de calculs)
+
+```{r}
+#RETIRER DES VARIABLES TROP CORRÉLÉES
+```
+
+Pour avoir un aperçu global et visuel des variables qui ont un impact sur la variable cible, on affiche un graphe des coefficients de corrélation entre la variable cible et chacune des autres variables. 
+
+```{r}
+# Matrice des corrélations de toutes les variables 
+cor_matrix <- cor(train[, 1:21])
+
+# Récupérer les coefficients de corrélation entre la variable cible et les autres variables
+target_correlations <- cor_matrix[, 5] # La 5ème colonne correspond à la variable cible
+
+# Création d'un dataframe avec les noms des variables et leurs corrélations avec la variable cible
+correlation_data <- data.frame(variable = names(target_correlations)[-5], 
+                               correlation = unlist(target_correlations[-5]))
+
+# Création d'un graphique (barplot) des coefficients de corrélation
+ggplot(correlation_data, aes(x = variable, y = correlation)) +
+  geom_bar(stat = "identity", # Hauteur des barres = coefficient de corrélation
+           fill = "#4E84C4", # Couleur de remplissage 
+           alpha = 0.7, # Transparence de la couleur de remplissage
+           color = "black", # Couleur des contours 
+           linewidth = 0.3) + # Épaisseur des contours
+  labs(title = 'Corrélations entre la variable cible et les autres variables', # Titre du graphique
+       x = 'Variables', # Nom de l'axe des abscisses
+       y = 'Coefficient de corrélation') + # Nom de l'axe des ordonnées
+  theme(plot.title = element_text(hjust = 0.5, # Position du titre 
+                                  size = 12, # Taille du titre
+                                  face = "bold")) # Titre en gras
+
+```
+Les variables qui semblent avoir le plus un impact sur la varaible cible sont 'age', 'BTC2', 'CDNL', 'sujet' et 'VFNL'. 
+
+Regardons visuellement leur impact.
+
+```{r}
+# Créer une nouvelle variable pour catégoriser les âges en intervalles spécifiques
+train$age_group <- cut(train$age, breaks = c(30, 50, 60, 65, 70, 85))
+
+# Créer le graphique avec la nouvelle variable d'âge_group
+score_plot <- ggplot(train, aes(x = duree, y = score, group = sujet, color = age_group)) +
+  geom_line() +
+  labs(title = "Évolution du score pour chaque individu en fonction de l'âge", x = "Temps", y = "Score") +
+  theme_minimal()
+
+# Afficher le graphique
+score_plot
+
+```
+Sur ce graphe, on peut remarquer que :
+• les individus qui ont entre 50 et 60 ans ont plutot tendance à avoir un score bas (vert kaki)
+• tandis que les individus plus agés, qui ont entre 70 et 85 ans ont un score plus élevé en moyenne (rose fushia)
+
+```{r}
+# Créer une nouvelle variable pour catégoriser les âges en intervalles spécifiques
+train$BTC2_group <- cut(train$BTC2, breaks = c(0, 10, 20, 25, 30, 40))
+
+# Créer le graphique avec la nouvelle variable d'âge_group
+score_plot <- ggplot(train, aes(x = duree, y = score, group = sujet, color = BTC2_group)) +
+  geom_line() +
+  labs(title = "Évolution du score pour chaque individu en fonction de BTC2", x = "Temps", y = "Score") +
+  theme_minimal()
+
+# Afficher le graphique
+score_plot
+
+```
+
+```{r}
+# Création du graphique
+score_btc2_plot <- ggplot(train, aes(x = BTC2, y = score)) +
+  geom_point() +  # Points pour chaque observation
+  labs(title = "Score en fonction de BTC2", x = "BTC2", y = "Score") +  # Ajout des titres des axes
+  theme_minimal()  # Utilisation d'un thème minimal pour le graphique
+
+# Affichage du graphique
+score_btc2_plot
+
+```
+```{r}
+# Création du graphique
+score_cdnl_plot <- ggplot(train, aes(x = CDNL, y = score)) +
+  geom_point() +  # Points pour chaque observation
+  labs(title = "Score en fonction de CDNL", x = "CDNL", y = "Score") +  # Ajout des titres des axes
+  theme_minimal()  # Utilisation d'un thème minimal pour le graphique
+
+# Affichage du graphique
+score_cdnl_plot
+
+```
+
+
+```{r}
+# Création du graphique
+score_vfnl_plot <- ggplot(train, aes(x = VFNL, y = score)) +
+  geom_point() +  # Points pour chaque observation
+  labs(title = "Score en fonction de VFNL", x = "VFNL", y = "Score") +  # Ajout des titres des axes
+  theme_minimal()  # Utilisation d'un thème minimal pour le graphique
+
+# Affichage du graphique
+score_vfnl_plot
+
+```
+
+On regarde maintenant comment évolue le score en fonction de la durée pour certains individus (ici par exemple, on selectionne les individus $1,5,27,38,40$ et $17$).
+
+```{r}
+selected=c(1,5,27,38,40,17)
+train %>% filter(sujet %in% selected) %>% 
+  ggplot() + geom_point(aes(x = duree, y = score)) + facet_wrap(~ sujet, ncol=2)
+```
+
+Avec ces graphiques, il est difficile de conclure quant à la distribution des scores des individus. 
+
+Pour une vision plus globale, on affiche l'évolution du score en fonction de la durée pour chaque individu. On colore les données en focntion du 'genre' pour observer si celui-ci a un impact sur le 'score', mais à priori, au vu du graphe des corrélations avec la variable cible, non. 
+
+```{r}
+score_plot <- ggplot(train, aes(x = duree, y = score, group = sujet, color = as.factor(genre))) +
+  geom_line() +
+  labs(title = "Évolution du score pour chaque individu en focntion du genre", x = "Temps", y = "Score") +
+  theme_minimal()
+score_plot
+
+```
+Nous pouvons remarquer plusieurs choses : 
+• Premièrement, le 'genre' ne semble pas avoir d'impact sur le 'score' : nous n'observons pas de tendance particulière.
+• Deuxièmement, nous pouvons observer que la tendence des scores semblent s'inverser aux alentours de $100$ pour la plupart des individus. En effet, les individus ayant un score croissant au début voient celui-ci décroitre aux alentours de $100$ et inversement, ceux pour qui le score diminuait au début se met à réaugmenter après le passage des $100$.
+Nous exploiterons cette tendance particulière au cours du projet.
+
+# Premier sampling : division du jeu de données aléatoirement 
+
+À présent, nous divisons aléatoirement le jeu de données en 2 ensembles :
+
+• un ensemble d’entrainement qui va permettre de construire le modèle,
+• un ensemble de test pour évaluer les performances du modèle.
+
+$70\%$ des données sont utilisés pour former l’ensemble d’entrainement et $30\%$ pour celui de test. 
+```{r}
+#Séparation Train / Validation du modèle 
+
+mydata_split <- initial_split(train, prop = .7)
+data_train <- training(mydata_split)
+data_valid  <- testing(mydata_split)
+```
+
+## Fiitng : Premier modèle, modèle linéaire basique
+
+Même si ce ne sera surement pas le meilleur, nous commençons par créer un modèle linéaire basique (lm) avec la variable 'score' comme variable réponse et toutes les autres variables disponibles dans l'ensemble d'entraînement comme variables explicative. Nous évaluons ses performances sur l'ensemble de validation en utilisant la métrique RMSE. 
+
+```{r}
+#MODELE LINEAIRE BASIQUE
+mod1=lm(score~.,data=data_train)
+RMSE1= rmse(data_valid$score,predict(mod1, newdata = data_valid))
+print(RMSE1)
+```
+
+Nous obtenons une RMSE d'environ $7.76$ ce qui est très élevé dans notre cadre. En effet, le but est de prédire un score qui prend ses valeurs dans l'ensemble $[0, 50]$. Une erreur de $7$ est donc particulièrement élevée par rapport à l'ordre de grandeur du score. Nous nous y attendions, car ce modèle n'est pas le plus adapté à nos données, nous l'avons construit dans un premier temps pour avioir une idée de ce que cela nous donnait. Pour l'améliorer, nous faisons de la sélection de variables. 
+
+
+```{r}
+#SELECTION DE VARIABLE
+stepAIC(mod1,~.,trace=T,direction=c("backward"))
+mod2=lm(formula = score ~ sujet + age + genre + duree + FF.Abs + FF.RAP + 
+          FF.DDP + AV.dB + AV.APQ11 + AV.DDA + BTC1 + BTC2 + CDNL + 
+          EFS + VFNL, data = data_train)
+RMSE2 = rmse(data_valid$score,predict(mod2, newdata = data_valid))
+print(RMSE1)
+```
+
+## Fiitng : second modèle, modèle mixte
+
+Le modèle linaire basique n'étant pas adapté à nos données, nous réalisons un modèle mixte pour prédire le score en fonction de l'âge, du genre et de la durée, en prenant en compte l'effet aléatoire du sujet.
+
+```{r}
+#MODELE MIXTE
+mod3 = lmer(score ~ age + genre + duree + (1|  sujet), data = data_train) 
+RMSE3 = rmse(data_valid$score,predict(mod3, newdata = data_valid))
+
+pred <- fitted(mod3)
+RMSE3 <- rmse(pred,data_train$score)
+pred <- predict(mod3,newdata=data_valid)
+
+print(RMSE3)
+```
+
+NE MARCHE PAS CAR IL FAUT AVOIR CROISER LES SUJETS DONC ON NE SEPARE PAS PAR SUJET MAIS PAR NORMAL COMME DHAB
+
+Nous ajustons un second modèle mixte qui, cette fois, utilise toutes les variables explicatives disponibles.
+
+```{r}
+mod4=lmer(score ~ age +genre+duree+ (1+ FF + FF.Abs + FF.RAP + 
+                                       FF.PPQ5 + FF.DDP + AV + AV.dB + AV.APQ3 + AV.APQ5 + AV.APQ11 + 
+                                       AV.DDA + BTC1 + BTC2 + CDNL + EFS + VFNL|  sujet), data = data_train) 
+
+```
+
+```{r}
+train$genre=as.factor(train$genre)
+```
+
+```{r}
+mod5=lmer(score ~ age +genre+duree+BTC1+BTC2+EFS+VFNL +(FF.Abs|  sujet), data = train, REML = FALSE) 
+RMSE5= rmse(valid$score,predict(mod3, newdata = valid))
+
+mod6=lmer(score ~ age +genre+duree+BTC1+BTC2+EFS+VFNL + FF.Abs +(AV.dB|  sujet), data = train, REML = FALSE) 
+RMSE6= rmse(valid$score,predict(mod4, newdata = valid))
+```
+
+On effectue une normalisation des données sur les ensembles d'entraînement et de validation, tout en préservant les variables 'genre', 'sujet' et 'score'. La normalisation des données permet de garantir que les variables sont sur la même échelle et ont des distributions comparables avant d'être utilisées dans la modélisation. 
+
+```{r}
+# Extraction et suppression des variables 'genre', 'sujet' et 'score' de l'ensemble d'entrainement 
+genre=train$genre
+sujet=train$sujet
+score=train$score
+train=subset(train,select=-genre)
+train=subset(train,select=-sujet)
+train=subset(train,select=-score)
+
+# Mise à l'echelle (centrage et reduction)  du reste des variables
+train=scale(train)
+
+# Création d'un dataframe avec les données centrées réduites
+train=as.data.frame(train)
+
+# Réajout des variables 'genre', 'sujet' et 'score'
+train$genre=genre
+train$sujet=sujet
+train$score=score
+
+# Même chose pour l'ensemble de validation
+genre=valid$genre
+sujet=valid$sujet
+score=valid$score
+valid=subset(valid,select=-genre)
+valid=subset(valid,select=-sujet)
+valid=subset(valid,select=-score)
+valid=scale(valid)
+valid=as.data.frame(valid)
+valid$genre=genre
+valid$sujet=sujet
+valid$score=score
+```
+
+À partir des données normalisées, on crée différents modèles mixtes. 
+
+```{r}
+mod4 = lmer(score ~ age + genre + duree + BTC1 + BTC2 + EFS + VFNL + AV.dB + (FF.Abs|  sujet), data = train, REML = FALSE) 
+RMSE4 = rmse(valid$score,predict(mod4, newdata = valid))
+
+mod5 = lmer(score ~ age + genre + duree + BTC1 + BTC2 + EFS + VFNL + FF.Abs + (AV.dB|  sujet), data = train, REML = FALSE) 
+RMSE5 = rmse(valid$score,predict(mod5, newdata = valid))
+
+mod6 = lmer(score ~ age + genre + duree + BTC1 + BTC2 + EFS + VFNL + (FF.Abs+AV.dB|  sujet), data = train, REML = FALSE) 
+RMSE6 = rmse(valid$score,predict(mod6, newdata = valid))
+```
+
+```{r}
+#TROP GROS MODELE NE CONVERGE PAS
+mod7 = lmer(score ~ age + genre + FF.Abs + AV.dB + BTC1 + BTC2 + EFS + VFNL + CDNL + (duree*inflx + FF.Abs + AV.dB +B TC1 + BTC2 + EFS + VFNL + CDNL|  sujet), data = train, REML = FALSE) 
+RMSE7 = rmse(valid$score,predict(mod7, newdata = valid))
+
+mod8 = lmer(score ~ age + genre + duree + BTC1 + BTC2 + EFS + VFNL + CDNL + (FF.Abs + AV.dB|  sujet), data = train, REML = FALSE) 
+RMSE8 = rmse(valid$score,predict(mod8, newdata = valid))
+
+mod9 =lmer(score ~ age + genre + duree + BTC1 + BTC2 + EFS+ VFNL + FF.Abs + CDNL + (AV.dB|  sujet), data = train, REML = FALSE) 
+RMSE9 = rmse(valid$score,predict(mod9, newdata = valid))
+
+mod10 = lmer(score ~ age + genre + duree + BTC1 + BTC2 + EFS + VFNL + FF.Abs + AV.dB +(1|  sujet), data = train) 
+RMSE10 = rmse(valid$score,predict(mod10, newdata = valid))
+
+```
+
+
+```{r}
+m10update<-update(mod10, REML=FALSE)
+RMSE10_UPDATE= rmse(valid$score,predict(m10update, newdata = valid))
+
+sort(as.matrix(AIC(mod4,mod5,mod6,mod7,mod8,mod9,mod10,m10update))[,2])%>%data.frame()%>% rmarkdown::paged_table()
+sort(as.matrix(BIC(mod4,mod5,mod6,mod7,mod8,mod9,mod10,m10update))[,2])%>%data.frame()%>% rmarkdown::paged_table()
+
+valid$pred_mod_m1 <- predict(mod7,newdata=valid)
+
+valid %>% filter(sujet %in% selected) %>% 
+  ggplot() + geom_point(aes(x = duree, y = score), color="red", size=3) + 
+  geom_line(aes(x = duree, y = pred_mod_m1)) + facet_wrap(~ sujet, ncol=4) 
+
+
+train$pred_mod_m1 <- fitted(mod7)
+
+train %>% filter(sujet %in% selected) %>% 
+  ggplot() + geom_point(aes(x = duree, y = score), color="red", size=3) + 
+  geom_line(aes(x = duree, y = pred_mod_m1)) + facet_wrap(~ sujet, ncol=4) 
+
+```
+
+## Ajout d'une variable : inflexion 
+
+```{r}
+moment_inflexion=numeric(42)
+
+for (i in 1:42){
+  patient<-train %>% filter(sujet ==i)
+  patient$duree=round(patient$duree)
+  patient <- aggregate(patient[c("age","genre","score","FF","FF.Abs","FF.RAP","FF.PPQ5","FF.DDP","AV","AV.dB","AV.APQ3","AV.APQ5","AV.APQ11","AV.DDA","BTC1","BTC2","CDNL","EFS","VFNL")], by = list(patient$duree), FUN = mean)
+  names(patient)[names(patient) == "Group.1"] <- "duree"
+  coeff_directeur <- numeric(0)
+  for (j in 1:(length(patient$duree)-1)) {
+    coeff_directeur <- c(coeff_directeur, (patient$score[j+1] - patient$score[j]) / (patient$duree[j+1] - patient$duree[j]))
+  }
+  variations=abs(diff(coeff_directeur))
+  indice_max_variation_patient <- which.max(variations)
+  moment_inflexion[i]=patient$duree[indice_max_variation_patient]
+}
+```
+
+## Le meilleur modèle 
+
+## XGBoost
+
+```{r}
+#XG BOOST
+Y_train=train$score
+X_train=subset(train,select=-score)
+Y_test=valid$score
+X_test=subset(valid,select=-score)
+
+
+
+xgb_trcontrol = trainControl(method = "cv", number = 5, allowParallel = TRUE, 
+                             verboseIter = FALSE, returnData = FALSE)
+
+xgbGrid <- expand.grid(nrounds = c(100,200),  
+                       max_depth = c(3, 5, 10, 15, 20),
+                       colsample_bytree = seq(0.5, 0.9, length.out = 5),
+                       ## valeurs par défaut : 
+                       eta = 0.1,
+                       gamma=0,
+                       min_child_weight = 1,
+                       subsample=1
+)
+
+xgb_model = train(X_train, Y_train, trControl = xgb_trcontrol, tuneGrid = xgbGrid, 
+                  method = "xgbTree")
+
+xgb_model$bestTune
+predicted = predict(xgb_model, X_test)
+residuals = Y_test - predicted
+RMSE = sqrt(mean(residuals^2))
+```
+
+```{r}
+pred_mod_m1=predict(xgb_model,X_train)
+train$pred_mod_m1=pred_mod_m1
+train %>% filter(sujet %in% selected) %>% 
+  ggplot() + geom_point(aes(x = duree, y = score), color="red", size=3) + 
+  geom_line(aes(x = duree, y = pred_mod_m1)) + facet_wrap(~ sujet, ncol=4) 
+
+valid$pred_mod_m1=predicted
+valid %>% filter(sujet %in% selected) %>% 
+  ggplot() + geom_point(aes(x = duree, y = score), color="red", size=3) + 
+  geom_line(aes(x = duree, y = pred_mod_m1)) + facet_wrap(~ sujet, ncol=4) 
+```
+
+# Second découpage : découpage temporel
+
+```{r}
+train2<-train
+train2 <- train2 %>%
+  group_by(sujet) %>%
+  mutate(inflexion = moment_inflexion[sujet]) %>%
+  ungroup()
+
+train2$inflx=(train2$duree>train2$inflexion)
+train2=subset(train2,select=-inflexion)
+train2$inflx=as.numeric(train2$inflx)
+
+mydata_split <- initial_split(train2, prop = .7)
+train <- training(mydata_split)
+valid  <- testing(mydata_split)
+```
+
+# Modification du dataframe : faire la moyenne 
+
+On crée un nouveau dataframe en faisant, pour chaque individu, la moyenne des différentes mesures pour une même durée. À la place d'avoir 6 cycles pour chaque individu, on n'en a plus qu'un.  
+
+```{r}
+library(dplyr)
+
+# Arrondir la durée au dixième près
+ancien_dataframe$duree_arrondie <- round(ancien_dataframe$duree)
+
+# Calculer la moyenne des valeurs pour chaque individu sur les durées arrondies
+nouveau_dataframe <- ancien_dataframe %>%
+  group_by(sujet, duree_arrondie) %>%
+  summarise(across(where(is.numeric), mean)) %>%
+  ungroup()
+
+nouveau_dataframe%>% rmarkdown::paged_table()
+dim(nouveau_dataframe)
+
+```
+
+```{r}
+score_plot <- ggplot(nouveau_dataframe, aes(x = duree, y = score, group = sujet, color = as.factor(genre))) +
+  geom_line() +
+  labs(title = "Évolution du score pour chaque individu en fonction du genre", x = "Temps", y = "Score") +
+  theme_minimal()
+score_plot
+
+```
+
+# Conclusion 
